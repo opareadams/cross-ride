@@ -1,0 +1,877 @@
+From e4f6e765d6552d8e178874be64361483604daf85 Mon Sep 17 00:00:00 2001
+From: Opare Adams <opareadams@Macbooks-MacBook-Air.local>
+Date: Mon, 24 Sep 2018 01:59:52 +0000
+Subject: [PATCH] My submission
+XOV: XO_0_0_1
+
+---
+ .gitignore                                         |   2 +
+ build.gradle                                       |   1 +
+ .../techtrial/controller/PersonController.java     |   2 +-
+ .../techtrial/controller/RideController.java       |  69 +++++++-
+ .../com/crossover/techtrial/dto/TopDriverDTO.java  | 178 +++++++++++++--------
+ .../techtrial/exceptions/ApiErrorResponse.java     |  45 ++++++
+ .../java/com/crossover/techtrial/model/Person.java | 105 +++++++-----
+ .../java/com/crossover/techtrial/model/Ride.java   |   5 +
+ src/main/resources/application.properties          |   1 -
+ .../resources/db/changelog/db.changelog-1.1.xml    |  39 +++++
+ .../resources/db/changelog/db.changelog-master.xml |   2 +-
+ .../techtrial/CrossRideApplicationTest.java        |  12 ++
+ .../techtrial/controller/PersonControllerTest.java |  22 +++
+ .../techtrial/controller/RideControllerTest.java   |  94 +++++++++++
+ .../com/crossover/techtrial/model/PersonTest.java  |  21 +++
+ .../com/crossover/techtrial/model/RideTest.java    |  21 +++
+ 16 files changed, 506 insertions(+), 113 deletions(-)
+ create mode 100644 src/main/java/com/crossover/techtrial/exceptions/ApiErrorResponse.java
+ create mode 100644 src/main/resources/db/changelog/db.changelog-1.1.xml
+ create mode 100644 src/test/java/com/crossover/techtrial/controller/RideControllerTest.java
+ create mode 100644 src/test/java/com/crossover/techtrial/model/PersonTest.java
+ create mode 100644 src/test/java/com/crossover/techtrial/model/RideTest.java
+
+diff --git a/.gitignore b/.gitignore
+index 38e8d91..50de95f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -7,3 +7,5 @@ build/*
+ target/*
+ **/.DS_Store
+ **/.settings
++/.gradle/
++/bin/
+diff --git a/build.gradle b/build.gradle
+index 2d73af5..e9375ae 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -42,6 +42,7 @@ dependencies {
+ 	testCompile('org.springframework.boot:spring-boot-starter-aop')
+ 	testCompile('org.springframework.boot:spring-boot-starter-test')
+ 	testCompile('org.mockito:mockito-core:2.7.22')
++	compile group: 'pl.pojo', name: 'pojo-tester', version: '0.7.6'
+ 	
+ }
+ 
+diff --git a/src/main/java/com/crossover/techtrial/controller/PersonController.java b/src/main/java/com/crossover/techtrial/controller/PersonController.java
+index ded9199..b588af2 100644
+--- a/src/main/java/com/crossover/techtrial/controller/PersonController.java
++++ b/src/main/java/com/crossover/techtrial/controller/PersonController.java
+@@ -35,7 +35,7 @@ public class PersonController {
+     return ResponseEntity.ok(personService.getAll());
+   }
+   
+-  @GetMapping(path = "/api/person/{perso-id}")
++  @GetMapping(path = "/api/person/{person-id}")
+   public ResponseEntity<Person> getPersonById(@PathVariable(name="person-id", required=true)Long personId) {
+     Person person = personService.findById(personId);
+     if (person != null) {
+diff --git a/src/main/java/com/crossover/techtrial/controller/RideController.java b/src/main/java/com/crossover/techtrial/controller/RideController.java
+index baea0d8..a4ee3a6 100644
+--- a/src/main/java/com/crossover/techtrial/controller/RideController.java
++++ b/src/main/java/com/crossover/techtrial/controller/RideController.java
+@@ -3,11 +3,20 @@
+  */
+ package com.crossover.techtrial.controller;
+ 
++import java.text.ParseException;
++import java.text.SimpleDateFormat;
+ import java.time.LocalDateTime;
++import java.time.format.DateTimeFormatter;
+ import java.util.ArrayList;
++import java.util.Date;
+ import java.util.List;
++
++import javax.persistence.EntityManager;
++import javax.persistence.Query;
++
+ import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.format.annotation.DateTimeFormat;
++import org.springframework.http.HttpStatus;
+ import org.springframework.http.ResponseEntity;
+ import org.springframework.web.bind.annotation.GetMapping;
+ import org.springframework.web.bind.annotation.PathVariable;
+@@ -16,7 +25,10 @@ import org.springframework.web.bind.annotation.RequestBody;
+ import org.springframework.web.bind.annotation.RequestParam;
+ import org.springframework.web.bind.annotation.RestController;
+ import com.crossover.techtrial.dto.TopDriverDTO;
++import com.crossover.techtrial.exceptions.ApiErrorResponse;
++import com.crossover.techtrial.model.Person;
+ import com.crossover.techtrial.model.Ride;
++import com.crossover.techtrial.service.PersonService;
+ import com.crossover.techtrial.service.RideService;
+ 
+ /**
+@@ -29,9 +41,53 @@ public class RideController {
+   
+   @Autowired
+   RideService rideService;
++  
++  @Autowired
++  PersonService personService;
++  
++  @Autowired
++  EntityManager em;
+ 
+-  @PostMapping(path ="/api/ride")
+-  public ResponseEntity<Ride> createNewRide(@RequestBody Ride ride) {
++  @PostMapping(path ="/api/ride/{driver-id}/{rider-id}")
++  public ResponseEntity<?> createNewRide(
++		  @PathVariable(value="driver-id") Long driverId,
++		  @PathVariable(value="rider-id") Long riderId,
++		  @RequestBody Ride ride) throws ParseException {
++	  
++	  /**
++	   * Verifying that driver or rider is registered
++	   * **/
++	  
++	  Person driver = personService.findById(driverId);
++	  Person rider = personService.findById(riderId);
++	  
++	  if(driver == null || !driver.getCategory().equals("driver")) {
++		  return new ApiErrorResponse().send(HttpStatus.EXPECTATION_FAILED,"Driver is not registered");
++	  }
++	  else if(rider == null || !rider.getCategory().equals("rider")) {
++		  return new ApiErrorResponse().send(HttpStatus.EXPECTATION_FAILED,"Rider is not registered");
++	  }
++	  else {
++		  ride.setDriver(driver);
++		  ride.setRider(rider);  
++	  }
++	  
++	  /**
++	   * Verifying Start time and end time requirements
++	   * **/
++	  SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
++	  
++	  Date startDateTime = sdf.parse(ride.getStartTime());
++	  Date endDateTime = sdf.parse(ride.getEndTime());
++	  
++	  if(startDateTime.compareTo(endDateTime) == 0) {
++		  return new ApiErrorResponse().send(HttpStatus.EXPECTATION_FAILED,"End time is equal to Start time");
++	  }
++	  if(startDateTime.after(endDateTime)) {
++		  return new ApiErrorResponse().send(HttpStatus.EXPECTATION_FAILED,"Start time is after End time");
++	  }
++	  
++	  
+     return ResponseEntity.ok(rideService.save(ride));
+   }
+   
+@@ -61,6 +117,15 @@ public class RideController {
+      * Your Implementation Here. And Fill up topDrivers Arraylist with Top
+      * 
+      */
++    Query q = em.createNativeQuery("select a.driver_id,b.email,b.name, sum(TIME_TO_SEC(TIMEDIFF(a.end_time,a.start_time))/60) totalMinutes, TIME_TO_SEC(MAX(TIMEDIFF(a.end_time,a.start_time)))/60 maximumDuration, count(a.driver_id) totalRides \n" + 
++    		"from crossride.ride a\n" + 
++    		"left join crossride.person b on a.driver_id=b.id\n" + 
++    		"where a.start_time >= '"+startTime+"' and a.end_time <= '"+endTime+"'\n" + 
++    		"group by driver_id\n" + 
++    		"order by totalRides desc\n" + 
++    		"limit "+count+"","TopDriverDTOMapping");
++    
++    topDrivers = q.getResultList();
+     
+     return ResponseEntity.ok(topDrivers);
+     
+diff --git a/src/main/java/com/crossover/techtrial/dto/TopDriverDTO.java b/src/main/java/com/crossover/techtrial/dto/TopDriverDTO.java
+index 9a807ea..ee37c7b 100644
+--- a/src/main/java/com/crossover/techtrial/dto/TopDriverDTO.java
++++ b/src/main/java/com/crossover/techtrial/dto/TopDriverDTO.java
+@@ -3,87 +3,135 @@
+  */
+ package com.crossover.techtrial.dto;
+ 
++import java.io.Serializable;
++
++import javax.persistence.ColumnResult;
++import javax.persistence.ConstructorResult;
++import javax.persistence.Entity;
++import javax.persistence.EntityResult;
++import javax.persistence.FieldResult;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.SqlResultSetMapping;
++
+ /**
+  * @author crossover
+  *
+  */
+-public class TopDriverDTO {
+-  
+-  /**
+-   * Constructor for TopDriverDTO
+-   * @param name
+-   * @param email
+-   * @param totalRideDurationInSeconds
+-   * @param maxRideDurationInSecods
+-   * @param averageDistance
+-   */
+-  public TopDriverDTO(String name, 
+-      String email, 
+-      Long totalRideDurationInSeconds,
+-      Long maxRideDurationInSecods,
+-      Double averageDistance) {
+-    this.setName(name);
+-    this.setEmail(email);
+-    this.setAverageDistance(averageDistance);
+-    this.setMaxRideDurationInSecods(maxRideDurationInSecods);
+-    this.setTotalRideDurationInSeconds(totalRideDurationInSeconds);
+-    
+-  }
+-  
+-  public TopDriverDTO() {
+-    
+-  }
+-  
+-  private String name;
+-  
+-  private String email;
+-  
+-  private Long totalRideDurationInSeconds;
+-  
+-  private Long maxRideDurationInSecods;
++
++@Entity
++@SqlResultSetMapping(
++		name="TopDriverDTOMapping",
++		classes={
++			@ConstructorResult(
++				targetClass = TopDriverDTO.class,
++				
++					columns={
++					   
++					    @ColumnResult(name="name",type = String.class),
++					    @ColumnResult(name="email",type =  String.class),
++					    @ColumnResult(name="totalMinutes",type = Long.class),
++					    @ColumnResult(name="maximumDuration",type = Long.class),
++					    @ColumnResult(name="totalRides",type = Long.class),
++					    
++					   }
++				)
++			}
++	)
++public class TopDriverDTO implements Serializable {
++	
++	private static final long serialVersionUID = 3605549122072628877L;
++
++	  @Id
++	  @GeneratedValue(strategy = GenerationType.IDENTITY)
++	  Long id;
+   
+-  private Double averageDistance;
++	  private String name;
++	  
++	  private String email;
++	  
++	  private Long totalMinutes;
++	  
++	  private Long maximumDuration;
++	  
++	  private Long totalRides;
++	  
++	  
++
++
++	public TopDriverDTO(String name, String email, Long totalMinutes, Long maximumDuration,Long totalRides) {
++		super();
++		this.name = name;
++		this.email = email;
++		this.totalMinutes = totalMinutes;
++		this.maximumDuration = maximumDuration;
++		this.totalRides = totalRides;
++	}
+ 
+-  public String getName() {
+-    return name;
+-  }
+ 
+-  public void setName(String name) {
+-    this.name = name;
+-  }
++	public String getName() {
++		return name;
++	}
+ 
+-  public String getEmail() {
+-    return email;
+-  }
+ 
+-  public void setEmail(String email) {
+-    this.email = email;
+-  }
++	public void setName(String name) {
++		this.name = name;
++	}
+ 
+-  public Long getTotalRideDurationInSeconds() {
+-    return totalRideDurationInSeconds;
+-  }
+ 
+-  public void setTotalRideDurationInSeconds(Long totalRideDurationInSeconds) {
+-    this.totalRideDurationInSeconds = totalRideDurationInSeconds;
+-  }
++	public String getEmail() {
++		return email;
++	}
+ 
+-  public Long getMaxRideDurationInSecods() {
+-    return maxRideDurationInSecods;
+-  }
+ 
+-  public void setMaxRideDurationInSecods(Long maxRideDurationInSecods) {
+-    this.maxRideDurationInSecods = maxRideDurationInSecods;
+-  }
++	public void setEmail(String email) {
++		this.email = email;
++	}
+ 
+-  public Double getAverageDistance() {
+-    return averageDistance;
+-  }
+ 
+-  public void setAverageDistance(Double averageDistance) {
+-    this.averageDistance = averageDistance;
+-  }
++	public Long getTotalMinutes() {
++		return totalMinutes;
++	}
++
++
++	public void setTotalMinutes(Long totalMinutes) {
++		this.totalMinutes = totalMinutes;
++	}
++
++
++	public Long getMaximumDuration() {
++		return maximumDuration;
++	}
++
++
++	public void setMaximumDuration(Long maximumDuration) {
++		this.maximumDuration = maximumDuration;
++	}
++
++
++	public Long getTotalRides() {
++		return totalRides;
++	}
++
++
++	public void setTotalRides(Long totalRides) {
++		this.totalRides = totalRides;
++	}
++
++/*
++	public Long getId() {
++		return id;
++	}
++
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++	
++	*/
+   
+   
++
+     
+ }
+diff --git a/src/main/java/com/crossover/techtrial/exceptions/ApiErrorResponse.java b/src/main/java/com/crossover/techtrial/exceptions/ApiErrorResponse.java
+new file mode 100644
+index 0000000..ac8d719
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/exceptions/ApiErrorResponse.java
+@@ -0,0 +1,45 @@
++package com.crossover.techtrial.exceptions;
++
++import org.springframework.http.HttpStatus;
++import org.springframework.http.ResponseEntity;
++
++public class ApiErrorResponse {
++	
++	 private HttpStatus status;
++	    //private Object data;
++	    private String error;
++
++	    public ApiErrorResponse() {
++	        this(null);
++	    }
++
++	    public ApiErrorResponse(Object data) {
++	       // this.data = data;
++	        this.error = null;
++	    }
++
++	    public ResponseEntity<ApiErrorResponse> send(HttpStatus status) {
++	        this.status = status;
++	        return new ResponseEntity<ApiErrorResponse>(this, status);
++	    }
++
++	    public ResponseEntity<ApiErrorResponse> send(HttpStatus status, String error) {
++	        this.status = status;
++	        this.error = error;
++	        return new ResponseEntity<ApiErrorResponse>(this, status);
++	    }
++
++	    /*public Object getData() {
++	        return data;
++	    }*/
++
++	    public String getError() {
++	        return error;
++	    }
++
++	    public HttpStatus getStatus() {
++	        return this.status;
++	    }
++	
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/model/Person.java b/src/main/java/com/crossover/techtrial/model/Person.java
+index 04d44f3..7fd2e4d 100644
+--- a/src/main/java/com/crossover/techtrial/model/Person.java
++++ b/src/main/java/com/crossover/techtrial/model/Person.java
+@@ -40,8 +40,20 @@ public class Person implements Serializable{
+ 
+   @Column(name = "registration_number")
+   String registrationNumber;
++  
++  @Column(name = "category")
++  String category;
++  
++
++  public String getCategory() {
++	return category;
++}
++
++public void setCategory(String category) {
++	this.category = category;
++}
+ 
+-  public Long getId() {
++public Long getId() {
+     return id;
+   }
+ 
+@@ -74,52 +86,59 @@ public class Person implements Serializable{
+   }
+ 
+   @Override
+-  public int hashCode() {
+-    final int prime = 31;
+-    int result = 1;
+-    result = prime * result + ((email == null) ? 0 : email.hashCode());
+-    result = prime * result + ((id == null) ? 0 : id.hashCode());
+-    result = prime * result + ((name == null) ? 0 : name.hashCode());
+-    result = prime * result + ((registrationNumber == null) ? 0 : registrationNumber.hashCode());
+-    return result;
+-  }
++public int hashCode() {
++	final int prime = 31;
++	int result = 1;
++	result = prime * result + ((category == null) ? 0 : category.hashCode());
++	result = prime * result + ((email == null) ? 0 : email.hashCode());
++	result = prime * result + ((id == null) ? 0 : id.hashCode());
++	result = prime * result + ((name == null) ? 0 : name.hashCode());
++	result = prime * result + ((registrationNumber == null) ? 0 : registrationNumber.hashCode());
++	return result;
++}
+ 
+   @Override
+-  public boolean equals(Object obj) {
+-    if (this == obj)
+-      return true;
+-    if (obj == null)
+-      return false;
+-    if (getClass() != obj.getClass())
+-      return false;
+-    Person other = (Person) obj;
+-    if (email == null) {
+-      if (other.email != null)
+-        return false;
+-    } else if (!email.equals(other.email))
+-      return false;
+-    if (id == null) {
+-      if (other.id != null)
+-        return false;
+-    } else if (!id.equals(other.id))
+-      return false;
+-    if (name == null) {
+-      if (other.name != null)
+-        return false;
+-    } else if (!name.equals(other.name))
+-      return false;
+-    if (registrationNumber == null) {
+-      if (other.registrationNumber != null)
+-        return false;
+-    } else if (!registrationNumber.equals(other.registrationNumber))
+-      return false;
+-    return true;
+-  }
++public boolean equals(Object obj) {
++	if (this == obj)
++		return true;
++	if (obj == null)
++		return false;
++	if (getClass() != obj.getClass())
++		return false;
++	Person other = (Person) obj;
++	if (category == null) {
++		if (other.category != null)
++			return false;
++	} else if (!category.equals(other.category))
++		return false;
++	if (email == null) {
++		if (other.email != null)
++			return false;
++	} else if (!email.equals(other.email))
++		return false;
++	if (id == null) {
++		if (other.id != null)
++			return false;
++	} else if (!id.equals(other.id))
++		return false;
++	if (name == null) {
++		if (other.name != null)
++			return false;
++	} else if (!name.equals(other.name))
++		return false;
++	if (registrationNumber == null) {
++		if (other.registrationNumber != null)
++			return false;
++	} else if (!registrationNumber.equals(other.registrationNumber))
++		return false;
++	return true;
++}
+ 
+   @Override
+-  public String toString() {
+-    return "Person [id=" + id + ", name=" + name + ", email=" + email + ", registrationNumber=" + registrationNumber + "]";
+-  }
++public String toString() {
++	return "Person [id=" + id + ", name=" + name + ", email=" + email + ", registrationNumber=" + registrationNumber
++			+ ", category=" + category + "]";
++}
+   
+   
+ 
+diff --git a/src/main/java/com/crossover/techtrial/model/Ride.java b/src/main/java/com/crossover/techtrial/model/Ride.java
+index 1740eea..3be18eb 100644
+--- a/src/main/java/com/crossover/techtrial/model/Ride.java
++++ b/src/main/java/com/crossover/techtrial/model/Ride.java
+@@ -4,6 +4,7 @@
+ package com.crossover.techtrial.model;
+ 
+ import java.io.Serializable;
++
+ import javax.persistence.Column;
+ import javax.persistence.Entity;
+ import javax.persistence.GeneratedValue;
+@@ -14,6 +15,8 @@ import javax.persistence.ManyToOne;
+ import javax.persistence.Table;
+ import javax.validation.constraints.NotNull;
+ 
++import com.fasterxml.jackson.annotation.JsonIgnore;
++
+ @Entity
+ @Table(name = "ride")
+ public class Ride implements Serializable{
+@@ -35,10 +38,12 @@ public class Ride implements Serializable{
+   @Column(name = "distance")
+   Long distance;
+   
++  @JsonIgnore
+   @ManyToOne
+   @JoinColumn(name = "driver_id", referencedColumnName = "id")
+   Person driver;
+   
++  @JsonIgnore
+   @ManyToOne
+   @JoinColumn(name = "rider_id", referencedColumnName = "id")
+   Person rider;
+diff --git a/src/main/resources/application.properties b/src/main/resources/application.properties
+index 2e14879..463a323 100644
+--- a/src/main/resources/application.properties
++++ b/src/main/resources/application.properties
+@@ -6,7 +6,6 @@ spring.datasource.password=
+ spring.datasource.driver-class-name=com.mysql.jdbc.Driver
+ 
+ spring.jpa.hibernate.ddl-auto=none
+-
+ spring.liquibase.change-log=classpath:/db/changelog/db.changelog-master.xml
+ spring.data.rest.base-path=/api
+ 
+diff --git a/src/main/resources/db/changelog/db.changelog-1.1.xml b/src/main/resources/db/changelog/db.changelog-1.1.xml
+new file mode 100644
+index 0000000..cc2a546
+--- /dev/null
++++ b/src/main/resources/db/changelog/db.changelog-1.1.xml
+@@ -0,0 +1,39 @@
++<?xml version="1.1" encoding="UTF-8" standalone="no"?>
++<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd">
++    <changeSet author="crossover" id="1001122001_create_tables">
++        <createTable tableName="person">
++            <column autoIncrement="true" name="id" type="BIGINT">
++                <constraints primaryKey="true" primaryKeyName="pk_person"/>
++            </column>
++            <column name="name" type="VARCHAR(255)"/>
++            <column name="email" type="VARCHAR(255)"/>
++            <column name="registration_number" type="VARCHAR(255)"/>
++            <column name="category" type="VARCHAR(255)"/>
++            
++        </createTable>
++        <createTable tableName="ride">
++            <column autoIncrement="true" name="id" type="BIGINT">
++                <constraints primaryKey="true" primaryKeyName="pk_ride"/>
++            </column>
++            <column name="driver_id" type="BIGINT"/>
++            <column name="rider_id" type="BIGINT"/>
++            <column name="start_time" type="DATETIME"/>
++            <column name="end_time" type="DATETIME"/>
++            <column name="distance" type="BIGINT"/>
++        </createTable>
++         <addForeignKeyConstraint baseColumnNames="driver_id"
++            baseTableName="ride"
++            constraintName="fk_address_person_driver"
++            onDelete="CASCADE"
++            onUpdate="RESTRICT"
++            referencedColumnNames="id"
++            referencedTableName="person"/>
++          <addForeignKeyConstraint baseColumnNames="rider_id"
++            baseTableName="ride"
++            constraintName="fk_address_person_rider"
++            onDelete="CASCADE"
++            onUpdate="RESTRICT"
++            referencedColumnNames="id"
++            referencedTableName="person"/>
++    </changeSet>
++</databaseChangeLog>
+diff --git a/src/main/resources/db/changelog/db.changelog-master.xml b/src/main/resources/db/changelog/db.changelog-master.xml
+index ea61ac5..aaed9c5 100644
+--- a/src/main/resources/db/changelog/db.changelog-master.xml
++++ b/src/main/resources/db/changelog/db.changelog-master.xml
+@@ -2,5 +2,5 @@
+   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+   xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.4.xsd">
+-  <include file="db/changelog/db.changelog-1.0.xml"/>
++  <include file="db/changelog/db.changelog-1.1.xml"/>
+ </databaseChangeLog>
+\ No newline at end of file
+diff --git a/src/test/java/com/crossover/techtrial/CrossRideApplicationTest.java b/src/test/java/com/crossover/techtrial/CrossRideApplicationTest.java
+index ff6ac24..403ce33 100644
+--- a/src/test/java/com/crossover/techtrial/CrossRideApplicationTest.java
++++ b/src/test/java/com/crossover/techtrial/CrossRideApplicationTest.java
+@@ -3,10 +3,22 @@
+  */
+ package com.crossover.techtrial;
+ 
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.test.context.junit4.SpringRunner;
++
+ /**
+  * @author crossover
+  *
+  */
++@RunWith(SpringRunner.class)
++@SpringBootTest
+ public class CrossRideApplicationTest {
++	
++	  @Test
++	  public void contextLoads() {
++	    
++	  }
+ 
+ }
+diff --git a/src/test/java/com/crossover/techtrial/controller/PersonControllerTest.java b/src/test/java/com/crossover/techtrial/controller/PersonControllerTest.java
+index 9ffe808..067fe2f 100644
+--- a/src/test/java/com/crossover/techtrial/controller/PersonControllerTest.java
++++ b/src/test/java/com/crossover/techtrial/controller/PersonControllerTest.java
+@@ -58,6 +58,28 @@ public class PersonControllerTest {
+     Assert.assertEquals("test 1", response.getBody().getName());
+     Assert.assertEquals(200,response.getStatusCode().value());
+   }
++  
++  @Test
++  public void testGetAllPersons() {
++	  HttpEntity<String> entity = template.getForEntity("/api/person",String.class);
++	  String body = entity.getBody();
++	    MediaType contentType = entity.getHeaders().getContentType();
++	    
++	    ResponseEntity<String> response =template.getForEntity("/api/person", String.class);
++	    Assert.assertNotNull(response.getBody());
++	    Assert.assertEquals(200,response.getStatusCode().value());
++	  
++  }
++  
++  @Test
++  public void testGetPersonById() {
++	  HttpEntity<String> entity = template.getForEntity("/api/person/1",String.class);
++	  
++	  ResponseEntity<String> response =template.getForEntity("/api/person/1", String.class);
++	    Assert.assertNotNull(response.getBody());
++	    Assert.assertEquals(200,response.getStatusCode().value());
++	  
++  }
+ 
+   private HttpEntity<Object> getHttpEntity(Object body) {
+     HttpHeaders headers = new HttpHeaders();
+diff --git a/src/test/java/com/crossover/techtrial/controller/RideControllerTest.java b/src/test/java/com/crossover/techtrial/controller/RideControllerTest.java
+new file mode 100644
+index 0000000..48bfb14
+--- /dev/null
++++ b/src/test/java/com/crossover/techtrial/controller/RideControllerTest.java
+@@ -0,0 +1,94 @@
++package com.crossover.techtrial.controller;
++
++import static org.junit.Assert.*;
++
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
++import org.springframework.boot.test.web.client.TestRestTemplate;
++import org.springframework.http.HttpEntity;
++import org.springframework.http.HttpHeaders;
++import org.springframework.http.MediaType;
++import org.springframework.http.ResponseEntity;
++import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
++import org.springframework.test.web.servlet.MockMvc;
++import org.springframework.test.web.servlet.setup.MockMvcBuilders;
++
++import com.crossover.techtrial.model.Person;
++import com.crossover.techtrial.model.Ride;
++import com.crossover.techtrial.repositories.PersonRepository;
++import com.crossover.techtrial.repositories.RideRepository;
++
++@RunWith(SpringJUnit4ClassRunner.class)
++@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
++public class RideControllerTest {
++	
++	 MockMvc mockMvc;
++	 
++	 @Autowired
++	 private RideController rideController;
++	 
++	 @Autowired
++	  private TestRestTemplate template;
++	 
++	 @Autowired
++	 private RideRepository rideRepository;
++	 
++	 @Autowired
++	 private PersonRepository personRepository;
++
++	@Before
++	public void setUp() throws Exception {
++		mockMvc = MockMvcBuilders.standaloneSetup(rideController).build();
++	}
++
++	@Test
++	public void testCreateNewRide() {
++		 HttpEntity<Object> ride = getHttpEntity(
++			        "{\n" + 
++			        "	\"startTime\":\"2018-08-26 10:10:00\",\n" + 
++			        "	\"endTime\":\"2018-08-26 11:30:00\",\n" + 
++			        "	\"distance\":30\n" + 
++			        "}");
++			    ResponseEntity<Ride> response = template.postForEntity(
++			        "/api/ride/4/15", ride, Ride.class);
++			    
++			    personRepository.findById(response.getBody().getId());
++			    
++			    Assert.assertEquals("2018-08-26 10:10:00", response.getBody().getStartTime());
++			    Assert.assertEquals(200,response.getStatusCode().value());
++	}
++
++	
++	@Test
++	public void testGetRideById() {
++		 HttpEntity<String> entity = template.getForEntity("/api/ride/1",String.class);
++		  String body = entity.getBody();
++		    MediaType contentType = entity.getHeaders().getContentType();
++		    
++		    ResponseEntity<String> response =template.getForEntity("/api/ride/1", String.class);
++		    Assert.assertNotNull(response.getBody());
++		    Assert.assertEquals(200,response.getStatusCode().value());
++	}
++
++	@Test
++	public void testGetTopDriver() {
++		HttpEntity<String> entity = template.getForEntity("/api/top-rides?startTime=2018-08-24T09:00:00&endTime=2018-08-26T11:30:00",String.class);
++		  String body = entity.getBody();
++		    MediaType contentType = entity.getHeaders().getContentType();
++		    
++		    ResponseEntity<String> response =template.getForEntity("/api/top-rides?startTime=2018-08-24T09:00:00&endTime=2018-08-26T11:30:00", String.class);
++		    Assert.assertNotNull(response.getBody());
++		    Assert.assertEquals(200,response.getStatusCode().value());
++	}
++
++	 private HttpEntity<Object> getHttpEntity(Object body) {
++		    HttpHeaders headers = new HttpHeaders();
++		    headers.setContentType(MediaType.APPLICATION_JSON);
++		    return new HttpEntity<Object>(body, headers);
++		  }
++}
+diff --git a/src/test/java/com/crossover/techtrial/model/PersonTest.java b/src/test/java/com/crossover/techtrial/model/PersonTest.java
+new file mode 100644
+index 0000000..733d274
+--- /dev/null
++++ b/src/test/java/com/crossover/techtrial/model/PersonTest.java
+@@ -0,0 +1,21 @@
++package com.crossover.techtrial.model;
++
++
++import org.junit.Test;
++import pl.pojo.tester.api.assertion.Assertions;
++import pl.pojo.tester.api.assertion.Method;
++
++
++public class PersonTest {
++	
++	private static final Class<Person> personClass = Person.class;
++
++	@Test
++	public void test() {
++		Assertions.assertPojoMethodsFor(personClass).testing(Method.CONSTRUCTOR, Method.GETTER, Method.SETTER).areWellImplemented();
++        Assertions.assertPojoMethodsFor(personClass).testing(Method.HASH_CODE).areWellImplemented();
++        Assertions.assertPojoMethodsFor(personClass).testing(Method.EQUALS).areWellImplemented();
++
++	}
++
++}
+diff --git a/src/test/java/com/crossover/techtrial/model/RideTest.java b/src/test/java/com/crossover/techtrial/model/RideTest.java
+new file mode 100644
+index 0000000..8c2d8e7
+--- /dev/null
++++ b/src/test/java/com/crossover/techtrial/model/RideTest.java
+@@ -0,0 +1,21 @@
++package com.crossover.techtrial.model;
++
++
++import org.junit.Test;
++
++import pl.pojo.tester.api.assertion.Assertions;
++import pl.pojo.tester.api.assertion.Method;
++
++public class RideTest {
++	
++	private static final Class<Ride> rideClass = Ride.class;
++
++	@Test
++	public void test() {
++		Assertions.assertPojoMethodsFor(rideClass).testing(Method.CONSTRUCTOR, Method.GETTER, Method.SETTER).areWellImplemented();
++        Assertions.assertPojoMethodsFor(rideClass).testing(Method.HASH_CODE).areWellImplemented();
++        Assertions.assertPojoMethodsFor(rideClass).testing(Method.EQUALS).areWellImplemented();
++
++	}
++
++}
+-- 
+2.14.3 (Apple Git-98)
+
